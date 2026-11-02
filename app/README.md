@@ -19,6 +19,20 @@ This directory contains the application source code.
 | `npm run test:watch` | Run tests in watch mode |
 | `npm run lint` | Run ESLint on all source files |
 
+## Free hosting with Cloudflare Pages
+
+The app is configured for static deployment on Cloudflare Pages. The `public/_headers` file supplies the required application and Worker Content Security Policies and shared security headers.
+
+1. Push this repository to GitHub.
+2. In Cloudflare, open **Workers & Pages**, choose **Create application** > **Pages** > **Connect to Git**, then select this repository and the branch to deploy.
+3. Configure the build:
+   - **Root directory:** `app`
+   - **Build command:** `npm run build`
+   - **Build output directory:** `dist`
+4. Save and deploy. Cloudflare Pages will provide a public HTTPS URL.
+
+After deployment, verify the response headers on `/`, `/assets/dom-worker-<hash>.js`, and `/assets/async-worker-<hash>.js`. The page must have the application CSP; both Worker responses must have the restricted Worker CSP. Also open the playground and confirm the exercises run. Production-host behavior is not verified until these checks pass.
+
 ## Project structure
 
 ```

@@ -66,6 +66,20 @@ describe("application and Worker response security policies", () => {
     }
   });
 
+  it("configures Cloudflare Pages headers for the app and both emitted Workers", () => {
+    const headers = readFileSync("public/_headers", "utf8").replaceAll("\r\n", "\n");
+    const appPolicy = viteConfig.preview.headers["Content-Security-Policy"];
+    const workerPolicy = "default-src 'none'; script-src 'self' 'unsafe-eval'; worker-src 'none'; connect-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'; frame-src 'none'; frame-ancestors 'none'";
+
+    expect(headers).toContain("/*\n  X-Content-Type-Options: nosniff");
+    expect(headers).toContain("Referrer-Policy: no-referrer");
+    expect(headers).toContain("Permissions-Policy: accelerometer=(), camera=(), geolocation=(), microphone=(), payment=(), usb=()");
+    expect(headers).toContain(`/\n  Content-Security-Policy: ${appPolicy}`);
+    expect(headers).toContain(`/index.html\n  Content-Security-Policy: ${appPolicy}`);
+    expect(headers).toContain(`/assets/dom-worker-*\n  Content-Security-Policy: ${workerPolicy}`);
+    expect(headers).toContain(`/assets/async-worker-*\n  Content-Security-Policy: ${workerPolicy}`);
+  });
+
   it("limits the Vite development CSP to the approved API and HMR WebSockets", () => {
     const developmentCsp = viteConfig.server.headers["Content-Security-Policy"];
     expect(developmentCsp).toContain("connect-src 'self' ws: https://jsonplaceholder.typicode.com");
