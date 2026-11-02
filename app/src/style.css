@@ -835,6 +835,10 @@ body {
   gap: 0.65rem;
 }
 
+.exercise-hints-content[hidden] {
+  display: none;
+}
+
 .hint-card {
   font-size: 0.85rem;
   line-height: 1.5;
