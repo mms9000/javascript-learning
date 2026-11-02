@@ -19,19 +19,18 @@ This directory contains the application source code.
 | `npm run test:watch` | Run tests in watch mode |
 | `npm run lint` | Run ESLint on all source files |
 
-## Free hosting with Cloudflare Pages
+## Free hosting with Cloudflare Workers Static Assets
 
-The app is configured for static deployment on Cloudflare Pages. The `public/_headers` file supplies the required application and Worker Content Security Policies and shared security headers.
+The app is configured for static deployment on Cloudflare Workers. `wrangler.jsonc` points the static asset deployment at Vite's `dist/` output and enables SPA fallback. The `public/_headers` file supplies the required application and Worker Content Security Policies and shared security headers.
 
 1. Push this repository to GitHub.
-2. In Cloudflare, open **Workers & Pages**, choose **Create application** > **Pages** > **Connect to Git**, then select this repository and the branch to deploy.
-3. Configure the build:
+2. In Cloudflare, create or open the Git-connected **Workers** project and select this repository and production branch.
+3. Configure the build root and command:
    - **Root directory:** `app`
    - **Build command:** `npm run build`
-   - **Build output directory:** `dist`
-4. Save and deploy. Cloudflare Pages will provide a public HTTPS URL.
+4. Ensure the Wrangler deployment uses `app/wrangler.jsonc`. Its `assets.directory` is `./dist`; Cloudflare Workers will provide a public HTTPS URL after deployment.
 
-After deployment, verify the response headers on `/`, `/assets/dom-worker-<hash>.js`, and `/assets/async-worker-<hash>.js`. The page must have the application CSP; both Worker responses must have the restricted Worker CSP. Also open the playground and confirm the exercises run. Production-host behavior is not verified until these checks pass.
+The Wrangler `name` must match the Worker name in Cloudflare; update it in `wrangler.jsonc` if the project uses a different name. After deployment, verify the response headers on `/`, `/assets/dom-worker-<hash>.js`, and `/assets/async-worker-<hash>.js`. The page must have the application CSP; both Worker responses must have the restricted Worker CSP. Also open the playground and confirm the exercises run. Production-host behavior is not verified until these checks pass.
 
 ## Project structure
 

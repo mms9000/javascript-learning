@@ -66,7 +66,7 @@ describe("application and Worker response security policies", () => {
     }
   });
 
-  it("configures Cloudflare Pages headers for the app and both emitted Workers", () => {
+  it("configures Cloudflare static asset headers for the app and both emitted Workers", () => {
     const headers = readFileSync("public/_headers", "utf8").replaceAll("\r\n", "\n");
     const appPolicy = viteConfig.preview.headers["Content-Security-Policy"];
     const workerPolicy = "default-src 'none'; script-src 'self' 'unsafe-eval'; worker-src 'none'; connect-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'; frame-src 'none'; frame-ancestors 'none'";
@@ -78,6 +78,15 @@ describe("application and Worker response security policies", () => {
     expect(headers).toContain(`/index.html\n  Content-Security-Policy: ${appPolicy}`);
     expect(headers).toContain(`/assets/dom-worker-*\n  Content-Security-Policy: ${workerPolicy}`);
     expect(headers).toContain(`/assets/async-worker-*\n  Content-Security-Policy: ${workerPolicy}`);
+  });
+
+  it("points Wrangler static assets at the production build output", () => {
+    const config = JSON.parse(readFileSync("wrangler.jsonc", "utf8"));
+
+    expect(config.assets).toEqual({
+      directory: "./dist",
+      not_found_handling: "single-page-application",
+    });
   });
 
   it("limits the Vite development CSP to the approved API and HMR WebSockets", () => {
