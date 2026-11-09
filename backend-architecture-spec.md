@@ -1,159 +1,132 @@
 # Backend Requirements and Architecture Specification
-## Interactive JavaScript Learning Platform — Phase 0 Architecture Audit & Evolution Plan
+## Interactive JavaScript Learning Platform — Phase 0.1 Architecture Review and Corrections
 
-**Version:** 1.0  
-**Status:** Phase 0 Baseline Proposal (Read-Only Planning)  
-**Parent Documents:** `constitution.md`, `requirements.md`, `architecture-spec.md`, `curriculum-spec.md`
-
----
-
-## 1. Executive Summary & Audit Baseline
-
-The Interactive JavaScript Learning Platform is currently an entirely client-side, zero-backend single-page application built with Vite, vanilla ECMAScript modules, CodeMirror 6, browser Web Workers, Vitest, and Playwright. It is deployable as static HTML, CSS, and JavaScript to any static host (e.g., GitHub Pages, Cloudflare Workers Static Assets).
-
-This document establishes the architectural foundation for evolving the platform from a client-isolated learning tool into a full-scale educational platform supporting:
-1. User registration, authentication, and profiles.
-2. Cross-device progress synchronization with automatic guest-to-account migration.
-3. Persistent exercise attempt history and assessment score tracking.
-4. Granular role-based access control (RBAC) separating learners, content editors, and platform administrators.
-5. Future-proof course and curriculum management (CMS) without architectural redesign.
-
-**Core Invariant:** Per `constitution.md` §7, `requirements.md` §FR-011, and `architecture-spec.md` §5, student-submitted JavaScript is untrusted code. It **MUST NOT** be executed on the backend. The platform's tri-modal client-side Web Worker architecture (Ordinary Worker, Controlled DOM Worker, Async Worker) is strictly preserved.
+**Version:** 2.0  
+**Status:** Revised Phase 0.1 Architecture Specification (Read-Only Planning)  
+**Parent Documents:** `constitution.md`, `requirements.md`, `architecture-spec.md`, `curriculum-spec.md`  
+**Supercedes:** `backend-architecture-spec.md` v1.0
 
 ---
 
-## 2. Existing Application Architecture Audit
+## 1. Executive Summary & Review Baseline
 
-This audit reflects the verified, inspected state of the codebase (`c:\Users\pc\Desktop\javascript-learning\app`).
+This document presents the revised, hardened backend architecture and functional requirements specification for evolving the Interactive JavaScript Learning Platform from a client-isolated static web application into a complete, secure, multi-tier educational platform.
 
-### 2.1 Application Architecture & Entry Points
-- **HTML Host (`app/index.html`):** Loads `src/main.js` as an ES module. Enforces a strict Content Security Policy (`<meta http-equiv="Content-Security-Policy">`) defining `script-src 'self' 'unsafe-eval'`, `worker-src 'self' blob:`, and `connect-src 'self' https://jsonplaceholder.typicode.com`.
-- **Entry Point (`app/src/main.js`):** Mounts the application by invoking `createApp(document.getElementById("app"))`.
-- **Application Factory (`app/src/app.js`):** Creates the persistent DOM shell (header, sidebar curriculum navigation, lesson content column, playground column). Manages overall state, lesson loading, and the top-level progress counter.
+### Confirmed Architectural Decisions (Baseline)
+1. **Backend Platform:** Supabase (Managed PostgreSQL, GoTrue Auth, PostgREST, Realtime, Edge Functions).
+2. **Access Model:** Dual-tier support for both anonymous **Guest Learners** and authenticated **Registered Learners**.
+3. **Execution Integrity:** Student-submitted JavaScript execution **strictly remains in the browser** across the established tri-modal Web Worker architecture (Ordinary Worker, Controlled DOM Worker, Async Worker). Zero untrusted learner code executes on the backend.
+4. **Static Frontend Deployability:** The application remains buildable via Vite as a static client application deployable to static hosts (GitHub Pages, Cloudflare Workers/Pages).
 
-### 2.2 Lesson Rendering and Navigation
-- **Curriculum Navigation (`app/src/components/navigation.js`):** Renders accordion-style module and lesson lists. Indicates active lesson, completion checkmarks, and prerequisite gating.
-- **Lesson View (`app/src/components/lesson-view.js`):** Renders structured lesson sections, code examples, learning objectives, and summary lists. Purely presenter logic; does not manipulate progress or execution state.
+### Corrections & Hardening Introduced in Version 2.0
+- **Progress Sync & Reset Semantics:** Deprecated naive Set Union; introduced state reconciliation with authoritative server timestamps, epoch-based progress resets (`last_reset_at`), and device synchronization revisions.
+- **Storage Boundary Isolation:** Enforced strict key isolation separating anonymous guest data (`jslearn_guest_progress_v1`) from authenticated account caches (`jslearn_account_<user_id>_*`) to eliminate shared-computer data leakage.
+- **Assessment Integrity & Server-Side Grading:** Established architectural distinction between self-reported coding exercises and verified assessments. Designed server-side grading for knowledge checks where private answer keys are never delivered to the client bundle.
+- **Administrative Security:** Hardened all `SECURITY DEFINER` database functions with fixed `search_path`, fully qualified schema references, execution privilege revocations, and out-of-band admin bootstrapping.
+- **Server-Side Account Deletion:** Designed service-role-mediated account deletion via Supabase Edge Functions with cascading foreign keys and GDPR scrubbing. Zero privileged service-role credentials exposed to the frontend.
+- **Relational Schema Hygiene:** Decoupled `active_lesson_id` from UI preferences; defaulted user profiles to private; enforced canonical curriculum foreign-key validation on lesson IDs; normalized `TIMESTAMPTZ` defaults to `now()`.
+- **Curriculum CMS Boundaries:** Kept executable validators and test harnesses in Git-versioned code; restricted future CMS capabilities to declarative content fields to eliminate dynamic code evaluation risks.
+- **Defense-in-Depth Deployment:** Documented security disparities between GitHub Pages and header-capable hosts (Cloudflare); updated Content Security Policy; established PostgreSQL Row Level Security (RLS) as the primary security boundary rather than CORS.
+- **Pervasive Security Gates:** Integrated security review and automated boundary testing into every implementation phase.
 
-### 2.3 Curriculum Organization
-- **Curriculum Definition (`app/src/curriculum.js`):** Canonical metadata for 9 modules and 64 lessons. Provides helpers `getCurriculum()`, `getTotalLessonCount()` (returns 64), `findLessonById(id)`, `findModuleById(id)`, and `getNextLessonId(id)`.
-- **Content Registry (`app/src/content/index.js`):** Imports and registers lesson definitions from individual files (`m1-l1.js` through `m9-l9.js`). Enforces structural validation (`assertLessonShape`) at module initialization. All 64 canonical lessons have registered implementations.
+---
 
-### 2.4 Progress Tracking & Storage Audit
-- **Module (`app/src/progress.js`):** Manages local storage persistence.
-- **Audited `localStorage` Key:** Exactly one key is used:
-  ```typescript
-  STORAGE_KEY = "jslearn_progress_v1"
-  ```
-- **Audited Data Structure:**
+## 2. Architecture Decision Records (ADRs)
+
+### ADR-001: Supabase as Backend Platform
+- **Status:** Approved.
+- **Context:** The platform requires relational data persistence, robust authentication, user management, and authorization, while maintaining low maintenance overhead and supporting static client deployment.
+- **Decision:** Adopt Supabase (PostgreSQL 15+, GoTrue Auth, PostgREST, Edge Functions). Client connects directly via `@supabase/supabase-js` using the public anonymous key (`anon`).
+- **Consequences:** Eliminates custom Node.js server maintenance. Security relies strictly on PostgreSQL Row Level Security (RLS). The database remains standard PostgreSQL, ensuring a seamless migration path to AWS RDS, Google Cloud SQL, or self-hosted Postgres if needed.
+
+### ADR-002: Storage Boundary Isolation on Shared Clients
+- **Status:** Approved.
+- **Context:** Many learners use public or shared computers (schools, libraries, internet cafes). If guest progress and authenticated progress share the same `localStorage` key, User B logging out leaves their progress exposed to Guest C or User D.
+- **Decision:** Partition browser storage into disjoint namespaces:
+  1. `jslearn_guest_progress_v1` (active exclusively for unauthenticated sessions).
+  2. `jslearn_account_<user_id>_progress_v1` (cached cloud state for specific user).
+  3. `jslearn_account_<user_id>_queue_v1` (offline mutations for specific user).
+  On logout, active memory is cleared, account caches are unmounted, and the client resets to the guest storage namespace without leaking account data.
+- **Consequences:** Completely prevents data crossover between different users on shared machines.
+
+### ADR-003: Progress Synchronization, autoritative Timestamps & Reset Semantics
+- **Status:** Approved.
+- **Context:** Naive Set Union (`Local ∪ Cloud`) cannot support "Reset Progress" (a stale device would resurrect wiped completions) and does not handle out-of-order writes or offline divergence. Furthermore, existing `localStorage` lacks per-lesson historical timestamps.
+- **Decision:**
+  1. **Authoritative Server Timestamps:** Client-provided completion timestamps are treated as advisory `client_recorded_at`. The database kernel assigns authoritative `completed_at = now()`.
+  2. **Migration Timestamping:** Because the existing `localStorage` schema (`jslearn_progress_v1`) stores only an array of lesson IDs without per-lesson timestamps, migrating guest lessons sets `completed_at = now()` and marks `migration_source = 'guest_migration'`.
+  3. **Reset Semantics via Epochs:** Resetting progress is an explicit server operation that records `last_reset_at = now()` in the user's progress summary and deletes completed lesson records. Any incoming offline sync payload where `client_recorded_at < last_reset_at` is discarded as stale.
+- **Consequences:** Guarantees deterministic state reconciliation, eliminates progress resurrection bugs, and supports valid progress resets.
+
+### ADR-004: Dual Assessment Integrity & Isolated Server-Side Grading
+- **Status:** Approved.
+- **Context:** Student code must execute in the browser to avoid server-side security catastrophes (RCE, container escape). However, if knowledge checks and certifications contain answer keys in public JavaScript, learners can inspect client bundles to fake 100% scores.
+- **Decision:**
+  1. **Self-Reported Coding Exercises:** Interactive exercises run in the client-side Web Worker. Passing status is recorded as practice completion.
+  2. **Server-Graded Knowledge Checks:** For verified assessments, question options and prompts are public, but `correctOptionId` is **stripped from the client bundle**. The client submits `{ assessment_id, answers: { q1: "opt_b", q2: "opt_a" } }` to a secure Postgres RPC function or Edge Function `submit_assessment()`. The server compares against the private database key, scores the submission, and records an immutable assessment attempt.
+- **Consequences:** Eliminates cheating on graded milestones while keeping code execution completely client-side.
+
+### ADR-005: Security Definer Hardening & RBAC Escalation Prevention
+- **Status:** Approved.
+- **Context:** PostgreSQL `SECURITY DEFINER` functions run with owner privileges. If `search_path` is mutable, attackers can hijack functions via schema poisoning.
+- **Decision:** All privileged functions must explicitly declare `SET search_path = pg_catalog, public`, use fully qualified schema references (`public.user_roles`), and revoke execution from `PUBLIC`. Initial administrator creation is out-of-band via database migrations or direct Supabase SQL Editor execution, never via public API.
+- **Consequences:** Immune to search-path injection and self-promotion attacks.
+
+### ADR-006: Server-Side Account Deletion & GDPR Compliance
+- **Status:** Approved.
+- **Context:** Self-service account deletion must purge `auth.users` and associated data. The Supabase client SDK cannot delete users from `auth.users` using the public `anon` key.
+- **Decision:** Route account deletion through a secure Supabase Edge Function (`delete-account`). The function validates the user's active JWT, confirms password/re-authentication, invokes `supabaseAdmin.auth.admin.deleteUser(userId)` using the server-isolated `service_role` key, and triggers cascading database foreign keys.
+- **Consequences:** Frontends never hold `service_role` credentials. Full GDPR compliance achieved.
+
+### ADR-007: Declarative CMS vs Version-Controlled Executable Logic
+- **Status:** Approved.
+- **Context:** A future CMS could tempt administrators to store validator JavaScript functions as strings in the database.
+- **Decision:** Executable code validators, Web Worker isolation policies, and test suites must **strictly remain in version-controlled Git code**. The database CMS will manage **only declarative, data-only fields** (markdown copy, objectives, hints, starter code templates, ordering).
+- **Consequences:** Eliminates dynamic `eval()` risks on database content and complies with strict CSP `script-src` policies.
+
+### ADR-008: Deployment Header Capabilities & Defense-in-Depth RLS
+- **Status:** Approved.
+- **Context:** The application must remain deployable to GitHub Pages (which does not support custom HTTP headers) as well as header-capable hosts (Cloudflare Workers/Pages).
+- **Decision:**
+  1. **Primary Boundary:** PostgreSQL Row Level Security (RLS) is the definitive security perimeter. Even if CORS or CSP headers are absent or misconfigured, unauthorized queries are rejected by the database engine.
+  2. **Header Policy:** Document CSP and Worker CSP are applied via `_headers` where supported (Cloudflare). For GitHub Pages, a `<meta>` CSP provides supplemental defense, with documented acknowledgments that Worker script response headers are unavailable on Pages.
+- **Consequences:** Application functions safely on GitHub Pages while delivering enterprise-grade defense-in-depth on header-capable hosting.
+
+---
+
+## 3. Existing Application Architecture Audit (Verified)
+
+Inspection of [`app/`](file:///c:/Users/pc/Desktop/javascript-learning/app) confirms:
+
+### 3.1 Application Components & Entry Points
+- **Entry Points:** [`app/index.html`](file:///c:/Users/pc/Desktop/javascript-learning/app/index.html) -> [`app/src/main.js`](file:///c:/Users/pc/Desktop/javascript-learning/app/src/main.js) -> `createApp` in [`app/src/app.js`](file:///c:/Users/pc/Desktop/javascript-learning/app/src/app.js).
+- **Presentation Layer:** Vanilla JavaScript ES modules. Modular components for Navigation ([`navigation.js`](file:///c:/Users/pc/Desktop/javascript-learning/app/src/components/navigation.js)), Lesson Rendering ([`lesson-view.js`](file:///c:/Users/pc/Desktop/javascript-learning/app/src/components/lesson-view.js)), Code Playground ([`playground.js`](file:///c:/Users/pc/Desktop/javascript-learning/app/src/components/playground.js)), CodeMirror 6 ([`editor.js`](file:///c:/Users/pc/Desktop/javascript-learning/app/src/components/editor.js)), and Knowledge Checks ([`knowledge-check.js`](file:///c:/Users/pc/Desktop/javascript-learning/app/src/components/knowledge-check.js)).
+- **Curriculum & Registry:** Canonical course map in [`app/src/curriculum.js`](file:///c:/Users/pc/Desktop/javascript-learning/app/src/curriculum.js) (64 lessons across 9 modules). Content registry in [`app/src/content/index.js`](file:///c:/Users/pc/Desktop/javascript-learning/app/src/content/index.js) imports all 64 statically implemented lessons (`m1-l1.js` to `m9-l9.js`).
+
+### 3.2 Progress Storage Audit & Deficiencies
+- **Storage Implementation:** Handled entirely in [`app/src/progress.js`](file:///c:/Users/pc/Desktop/javascript-learning/app/src/progress.js).
+- **Key:** Single key `jslearn_progress_v1`.
+- **Schema:**
   ```json
   {
     "schemaVersion": 1,
-    "completedLessons": ["m1-l1", "m1-l2", "m2-l1"],
+    "completedLessons": ["m1-l1", "m1-l2"],
     "lastUpdated": "2026-11-09T14:30:00.000Z"
   }
   ```
-- **Characteristics & Limitations:**
-  - Idempotent: `completedLessons` is filtered against canonical curriculum lesson IDs and deduplicated via `Set`.
-  - Fragile / Ephemeral: Device-bound. Clearing browser data or changing browsers erases all progress.
-  - Zero granular history: Does not store current active lesson, exercise code, attempt counts, timestamps per lesson, hint levels unlocked, or quiz selection history.
-  - No conflict resolution: Overwritten completely on each `saveProgress()`.
+- **Audited Gaps:**
+  1. *No per-lesson completion timestamps:* Only one global `lastUpdated` timestamp exists.
+  2. *No cursor tracking:* Active lesson ID and current module are not saved to storage.
+  3. *No attempt logs or snapshots:* Zero history of code runs or exercise submissions.
+  4. *No user isolation:* Storage is shared globally across the browser profile.
 
-### 2.5 Exercise and Validation Systems
-- **Base Validators (`app/src/content/validators.js`):** Provides `createBaseValidator` and helper assertions (`stripTrailingNewlines`, etc.). Evaluates worker output arrays against expected strings, types, and counts.
-- **Execution Modes:** Configured per lesson in `exercise.executionMode`:
-  1. `worker` (default): Synchronous/pure JavaScript executed in isolated Blob Worker.
-  2. `dom`: Interactive virtual DOM simulation for Module 6 executed via `dom-runner.js` and `dom-worker.js`.
-  3. `async-worker`: Asynchronous execution for Module 7 with tracked microtasks/macrotasks and a mediated host fetch bridge.
-  4. `knowledge-check`: Non-executing multiple-choice quizzes (`app/src/components/knowledge-check.js`).
+### 3.3 Worker Architecture & Execution Protocols
+- **Pure JavaScript Runner ([`runner.js`](file:///c:/Users/pc/Desktop/javascript-learning/app/src/runner.js)):** Blob Web Worker with stripped globals (`fetch`, `XMLHttpRequest`, `WebSocket`, `indexedDB`, `caches`, `importScripts`, `Function.prototype.constructor`, `eval`) and 5,000ms watchdog termination.
+- **Controlled DOM Runner ([`dom-runner.js`](file:///c:/Users/pc/Desktop/javascript-learning/app/src/dom-runner.js)):** External module worker (`dom-worker.js`) executing a bounded virtual DOM (max 200 nodes, depth 20, 50 listeners). Renders via trusted host DOM methods into [`dom-preview.js`](file:///c:/Users/pc/Desktop/javascript-learning/app/src/components/dom-preview.js). No `innerHTML` injection.
+- **Async Runner ([`async-runner.js`](file:///c:/Users/pc/Desktop/javascript-learning/app/src/async-runner.js)):** External worker (`async-worker.js`) tracking microtasks and timer tasks, bridging strictly allowlisted GET requests to `https://jsonplaceholder.typicode.com/todos/1` via [`async-fetch.js`](file:///c:/Users/pc/Desktop/javascript-learning/app/src/async-fetch.js).
 
-### 2.6 Assessment Functionality
-- **Dual Assessment Model (`app/src/components/playground.js`):** Certain lessons (e.g., `m8-l6`, `m8-l7`) enforce both a coding exercise and a supplemental `comprehensionCheck` (knowledge check). A lesson is marked complete (`markLessonComplete`) **only** when both assessments pass.
-- **Knowledge Check Form (`app/src/components/knowledge-check.js`):** Multiple-choice radio button form. Grades answers on client against `correctOptionId`. State is held purely in DOM/closures and discarded upon navigation.
-
-### 2.7 Worker Architecture & Execution Protocols
-- **Synchronous Runner (`app/src/runner.js`):** Spawns an inlined Blob Web Worker. Strips `fetch`, `XMLHttpRequest`, `WebSocket`, `EventSource`, `indexedDB`, `caches`, `importScripts`, `Function.prototype.constructor`, `eval`, and `postMessage`. Employs a 5,000ms watchdog timer (`worker.terminate()`). Caps output at 100 entries and 2,000 characters per entry.
-- **DOM Runner (`app/src/dom-runner.js`):** Communicates with external module worker `dom-worker.js`. Implements a virtual DOM tree (max 200 nodes, depth 20, 50 event listeners). Renders snapshots to `dom-preview.js` using safe DOM APIs (`textContent`, native controls). No raw HTML injection.
-- **Async Runner (`app/src/async-runner.js`):** Manages `async-worker.js`. Tracks `setTimeout` up to 50 registrations, resolves top-level async functions, drains microtasks, and bridges strictly allowlisted GET requests to `https://jsonplaceholder.typicode.com/todos/1` via `async-fetch.js`.
-
-### 2.8 Existing Tests and Tooling
-- **Unit & Integration Tests:** Vitest (`app/package.json`, 27+ test files). Covers progress, curriculum, runner execution boundaries, DOM policies, async fetching, and individual lesson validators.
-- **End-to-End Tests:** Playwright (`app/e2e/*.spec.js`). Real browser testing covering navigation, startup, responsive layout, exercise feedback, worker loop termination, and dual assessments.
-
-### 2.9 Existing Backend / Authentication Functionality
-- **Audit Result:** **Zero.** There is no authentication client, user session management, backend API client, or remote database integration in the existing codebase.
-
-### 2.10 Discontinued Initiatives
-- **Animated Explanations (`feature-spec-animated-explanations.md`, `lesson-animation.js`):** Formally discontinued. Per project instructions, this initiative remains stopped and will not be carried into backend planning.
-
----
-
-## 3. Backend Functional Requirements Specification
-
-Requirements are categorized into:
-- **MVP (Release 1.0):** Essential core to establish registered learning, cloud sync, and data persistence.
-- **Subsequent Releases (Release 2.0):** Role-based administration, attempt history analytics, and reporting.
-- **Future Enhancements (Release 3.0+):** Dynamic CMS, content versioning, and community features.
-
-```
-┌────────────────────────────────────────────────────────────────────────┐
-│                        REQUIREMENTS HIERARCHY                          │
-├───────────────────┬────────────────────────────┬───────────────────────┤
-│    MVP (R1.0)     │      Subsequent (R2.0)     │     Future (R3.0+)    │
-├───────────────────┼────────────────────────────┼───────────────────────┤
-│ • Auth & Profiles │ • Role-Based Admin (RBAC)  │ • Full Dynamic CMS    │
-│ • Guest Migration │ • Exercise History/Code    │ • Content Versioning  │
-│ • Progress Sync   │ • Assessment Scoring/Logs  │ • Multi-Course Engine │
-│ • Account Deletion│ • Learning Analytics / BI  │ • Audit Log System    │
-└───────────────────┴────────────────────────────┴───────────────────────┘
-```
-
-### 3.1 Authentication & Account Management
-| ID | Requirement | Description | Target Release |
-|---|---|---|---|
-| **AUTH-01** | User Registration | Self-service email & password registration with password complexity requirements (min 8 chars, 1 uppercase, 1 number). | MVP |
-| **AUTH-02** | User Login / Logout | Secure login issuing JWT access/refresh tokens. Instant client session clearance on logout. | MVP |
-| **AUTH-03** | Password Recovery | Automated email dispatch with time-bounded, secure reset tokens. | MVP |
-| **AUTH-04** | Email Verification | Email confirmation workflow to verify ownership prior to sensitive operations. | MVP |
-| **AUTH-05** | User Profiles | Storage of display name, avatar URL, created timestamp, and last active timestamp. | MVP |
-| **AUTH-06** | Session Handling | Secure token storage in browser (localStorage/memory with refresh rotation). Automatic silent token renewal. | MVP |
-| **AUTH-07** | Account Deletion | GDPR "Right to be Forgotten" self-service deletion. Cascades and deletes all user-linked progress, attempts, and profiles. | MVP |
-| **AUTH-08** | OAuth Social Login | Optional Google/GitHub OAuth sign-in. | Subsequent |
-
-### 3.2 Learning Progress & Synchronization
-| ID | Requirement | Description | Target Release |
-|---|---|---|---|
-| **PROG-01** | Completed Lessons Sync | Cloud persistence of all completed canonical lesson IDs with completion timestamps. | MVP |
-| **PROG-02** | Active Lesson State | Cloud persistence of the user's current module and active lesson ID across devices. | MVP |
-| **PROG-03** | Module & Overall Progress | Dynamic calculation of module-level and platform-level completion percentages. | MVP |
-| **PROG-04** | Cross-Device Sync | Automatic progress pull on login; push on completion. Resolves multi-device divergence via union merge. | MVP |
-| **PROG-05** | Guest Migration | Automatic detection and seamless upload of guest `localStorage` records upon sign-up or first login. | MVP |
-| **PROG-06** | Offline Resilience | Local caching of progress mutations during network disconnect; queue-based sync upon reconnection. | MVP |
-
-### 3.3 Exercises & Assessments
-| ID | Requirement | Description | Target Release |
-|---|---|---|---|
-| **EXER-01** | Attempt Logging | Storing timestamped records of exercise runs (passed/failed, execution time, error kind). | Subsequent |
-| **EXER-02** | Code Snapshots | Persisting user's submitted code solutions for completed lessons for later review. | Subsequent |
-| **EXER-03** | Assessment Scores | Recording knowledge-check quiz attempts, selected options, pass/fail status, and attempt counts. | Subsequent |
-| **EXER-04** | Personal Statistics | Learner dashboard displaying total time spent, completion velocity, and exercise success rate. | Subsequent |
-
-### 3.4 Administration & Operational Governance
-| ID | Requirement | Description | Target Release |
-|---|---|---|---|
-| **ADMIN-01** | Role-Based Access Control | Strict separation of `learner`, `content_editor`, and `admin` roles. | Subsequent |
-| **ADMIN-02** | User Management | Admin dashboard to list learners, view completion stats, ban/suspend accounts, and force resets. | Subsequent |
-| **ADMIN-03** | Privilege Escalation Block | Absolute guarantee that users cannot alter their own `role` or elevate permissions via client manipulation. | MVP (Schema level) |
-| **ADMIN-04** | Platform Statistics | Aggregate analytics (daily active learners, module drop-off curves, most failed exercises). | Subsequent |
-| **ADMIN-05** | Administrative Audit Log | Tamper-evident logging of all admin actions (role changes, user bans, content updates). | Future |
-
-### 3.5 Course & Content Management (CMS)
-| ID | Requirement | Description | Target Release |
-|---|---|---|---|
-| **CMS-01** | Static-First Baseline | Lessons continue loading from static client bundles for speed, zero API cost, and offline operation. | MVP |
-| **CMS-02** | Dynamic Curriculum DB | Relational representation of Courses, Modules, Lessons, and Exercises in Postgres. | Future |
-| **CMS-03** | Content Versioning | Version tags on lesson definitions allowing curriculum updates without invalidating historical progress. | Future |
-| **CMS-04** | Publication Workflow | Draft vs Published status for lessons; content-editors can stage lessons prior to release. | Future |
+### 3.4 Backend & Authentication Footprint
+- **Current State:** **0% backend footprint.** No network clients, authentication endpoints, or remote database tables exist.
 
 ---
 
@@ -166,129 +139,122 @@ Requirements are categorized into:
 │ Capability               │   Guest   │   Learner   │  Editor   │ Admin │
 ├──────────────────────────┼───────────┼─────────────┼───────────┼───────┤
 │ View lessons & run code  │     ✅     │      ✅      │     ✅     │   ✅   │
-│ Local progress save      │     ✅     │      ✅      │     ✅     │   ✅   │
-│ Cloud progress sync      │     ❌     │      ✅      │     ✅     │   ✅   │
-│ Cross-device history     │     ❌     │      ✅      │     ✅     │   ✅   │
-│ Saved code snapshots     │     ❌     │      ✅      │     ✅     │   ✅   │
+│ Local guest progress     │     ✅     │      ❌      │     ❌     │   ❌   │
+│ Cloud progress sync      │     ❌     │      ✅*     │     ✅     │   ✅   │
+│ Verified assessments     │     ❌     │      ✅*     │     ✅     │   ✅   │
+│ Cross-device history     │     ❌     │      ✅*     │     ✅     │   ✅   │
 │ User profile & settings  │     ❌     │      ✅      │     ✅     │   ✅   │
 │ Edit lesson content      │     ❌     │      ❌      │     ✅     │   ✅   │
 │ View platform analytics  │     ❌     │      ❌      │     ❌     │   ✅   │
 │ Manage users & roles     │     ❌     │      ❌      │     ❌     │   ✅   │
 └──────────────────────────┴───────────┴─────────────┴───────────┴───────┘
+* Requires verified email address before cloud sync is active.
 ```
 
-### 4.1 Guest Learners
-- **Access Rule:** Open access to all 64 lessons, interactive playground, and exercises. No login wall.
-- **Persistence Boundary:** Data strictly restricted to `localStorage` (`jslearn_progress_v1`).
-- **Network Boundary:** No authenticated API calls; zero personal data collected.
-
-### 4.2 Registered Learners
-- **Access Rule:** Standard authenticated user role (`learner`).
-- **Capabilities:** Automatically syncs progress across devices, saves exercise code snapshots, retains quiz scores, customizes profile and learning preferences.
-- **Data Isolation:** Enforced via Postgres Row Level Security (RLS) (`auth.uid() = user_id`). Learners can only read and write their own data.
-
-### 4.3 Content Editor Role Evaluation
-- **Evaluation:** Is a dedicated `content_editor` role necessary?
-- **Finding:** **Yes, for future releases (Phase 7 / CMS).** 
-  - *Rationale:* Principle of Least Privilege. Curriculum designers need to update lesson copy, hint texts, and starter code without possessing rights to delete user accounts, alter database permissions, or view sensitive operational logs.
-  - *MVP Status:* In MVP and Release 1.0, content remains version-controlled in Git (`src/content/`). Therefore, `content_editor` role is deferred to Phase 6/7, but the schema must accommodate it immediately via an extensible role enum.
-
-### 4.4 Platform Administrators
-- **Access Rule:** Users holding the `admin` role in `user_roles`.
-- **Capabilities:** Access to `/admin` routes, user management, audit review, and global analytics.
-- **Security Invariant:** User registration endpoints **never** accept a role parameter. Role assignment is restricted to database migrations, server-side service-role execution, or direct admin management via restricted RPC functions.
+### 4.1 Access Gating & Email Verification
+- **Unverified Registered Users:** Upon sign-up, users can access the platform and edit their profile. However, in compliance with confirmed product decisions, **cloud progress synchronization and verified assessment scoring remain blocked until email ownership is verified**. Unverified accounts cache progress in their private account cache (`jslearn_account_<user_id>_progress_v1`) marked as `unverified`.
+- **Guest Learner Isolation:** Guests use `jslearn_guest_progress_v1`. Guest operations never touch network endpoints.
 
 ---
 
-## 5. Progress Migration and Synchronization Design
-
-### 5.1 LocalStorage Baseline
-The audited client storage contains:
-```json
-{
-  "schemaVersion": 1,
-  "completedLessons": ["m1-l1", "m1-l2", "m2-l1"],
-  "lastUpdated": "2026-11-09T14:30:00.000Z"
-}
-```
-Only completed lesson IDs are stored.
-
-### 5.2 Guest-to-Account Migration Flow
-When an unregistered user who has completed lessons registers or logs into an account:
+## 5. Progress Migration, Synchronization & Reset Design
 
 ```
-[User Registers / Logs In]
-          │
-          ▼
-[Check LocalStorage: jslearn_progress_v1]
-          │
-    ┌─────┴────────────────┐
-    │                      │
-[Has Local Progress]  [Empty Local Progress]
-    │                      │
-    ▼                      ▼
-[Fetch Cloud Progress] [Fetch Cloud Progress]
-    │                      │
-    ▼                      ▼
-[Execute Set Union]    [Write Cloud -> Local]
-  Local ∪ Cloud            │
-    │                      ▼
-    ▼                  [Complete]
-[Atomic DB Upsert]
-    │
-    ▼
-[Update LocalStorage]
-    │
-    ▼
-[Sync Complete]
+┌────────────────────────────────────────────────────────────────────────┐
+│               STORAGE ISOLATION & SYNCHRONIZATION FLOW                 │
+├────────────────────────────────────────────────────────────────────────┤
+│  ANONYMOUS CONTEXT                     AUTHENTICATED ACCOUNT CONTEXT   │
+│  ┌─────────────────────────┐           ┌─────────────────────────────┐ │
+│  │ jslearn_guest_progress  │           │ jslearn_account_<uid>_cache │ │
+│  │ • Completed lesson IDs  │           │ • Verified cloud snapshot   │ │
+│  │ • Global timestamp      │           │ • Server sync revision      │ │
+│  └────────────┬────────────┘           └──────────────▲──────────────┘ │
+│               │ On First Sign-Up / Login              │                │
+│               ▼                                       │ Pull Sync      │
+│  ┌─────────────────────────┐                          │                │
+│  │ Migration Engine        │                          │                │
+│  │ • Deduplicate IDs       │                          │                │
+│  │ • Assign source=guest   │                          │                │
+│  │ • Send to merge RPC     │                          │                │
+│  └────────────┬────────────┘                          │                │
+│               │ Push                                  │                │
+│               ▼                                       │                │
+├───────────────┼───────────────────────────────────────┼────────────────┤
+│               ▼                                       │                │
+│  POSTGRESQL KERNEL                                    │                │
+│  ┌────────────────────────────────────────────────────┴─────────────┐  │
+│  │ reconcile_user_progress(uid, incoming_lessons, client_recorded)  │  │
+│  │ 1. Check user last_reset_at epoch. Discard if client is stale.   │  │
+│  │ 2. Insert new completions with completed_at = now().             │  │
+│  │ 3. Return authoritative unified progress record.                 │  │
+│  └──────────────────────────────────────────────────────────────────┘  │
+└────────────────────────────────────────────────────────────────────────┘
 ```
 
-### 5.3 Conflict Resolution Strategy: Set Union Merge
-Because learning progress is intrinsically monotonic (a lesson once mastered remains completed), conflict resolution between local storage and cloud storage avoids destructive overwrites by applying **Mathematical Set Union**:
+### 5.1 Storage Architecture
+```javascript
+// Storage Namespaces
+const GUEST_STORAGE_KEY = "jslearn_guest_progress_v1";
+const getAccountStorageKey = (uid) => `jslearn_account_${uid}_progress_v1`;
+const getAccountQueueKey = (uid) => `jslearn_account_${uid}_queue_v1`;
+const getAccountPrefKey = (uid) => `jslearn_account_${uid}_pref_v1`;
+```
 
-$$\text{Merged Completed} = \text{Local Completed} \cup \text{Cloud Completed}$$
+### 5.2 Guest-to-Account Migration Procedure
+1. When an unauthenticated learner logs in or registers:
+   - Client inspects `jslearn_guest_progress_v1`.
+   - If empty, cloud state is fetched and loaded into `jslearn_account_<uid>_progress_v1`.
+   - If guest completions exist, client calls the database RPC `migrate_guest_progress(lesson_ids TEXT[])`.
+   - The server verifies that each `lesson_id` exists in the canonical curriculum, inserts rows with `completed_at = now()`, and tags `source = 'guest_migration'`.
+   - The guest storage key `jslearn_guest_progress_v1` is **cleared** upon successful migration confirmation.
 
-$$\text{Merged Updated} = \max(\text{Local } lastUpdated, \text{Cloud } lastUpdated, \text{Now})$$
-
-**Rules:**
-1. **Never Overwrite with Less:** If a user completed 10 lessons on Device A (guest) and 15 lessons on Device B (registered), the merged state must contain all unique completed lessons from both (up to 25).
-2. **Current Active Lesson:** Resolved via Last-Write-Wins (LWW) using the `updated_at` ISO-8601 timestamp.
-3. **Idempotency:** Cloud synchronization uses SQL `ON CONFLICT (user_id, lesson_id) DO NOTHING` or `DO UPDATE SET updated_at = EXCLUDED.updated_at`.
-4. **Offline Queue:** If a learner completes a lesson while offline:
-   - Mark as completed in `localStorage`.
-   - Append mutation to an in-memory / `localStorage` mutation queue: `[{ action: "COMPLETE", lessonId: "m3-l1", timestamp: "..." }]`.
-   - Upon `navigator.onLine` event or subsequent app launch, process the queue with exponential backoff retry.
-5. **Debounce & Batching:** Frequent updates (e.g. active lesson changes) are debounced on the client by 1,500ms to eliminate redundant network roundtrips.
+### 5.3 Deterministic State Reconciliation & Progress Resets
+To resolve conflicts without naive union flaws:
+1. **Server-Side Summary Tracking:** The `user_progress_summary` table tracks `last_reset_at TIMESTAMPTZ DEFAULT now()`.
+2. **Explicit Reset Semantics:**
+   - When a user resets progress, client calls `reset_user_progress()`.
+   - Server sets `last_reset_at = now()`, deletes all rows from `lesson_progress` where `user_id = auth.uid()`, and increments `sync_revision`.
+   - Server returns the empty state.
+3. **Stale Device Handling:**
+   - Any incoming sync payload from an offline device carries `client_recorded_at`.
+   - If `client_recorded_at < last_reset_at`, the server rejects the completion as an obsolete pre-reset mutation.
+   - The stale device receives an explicit `FORCE_RESET` signal and purges its local cache.
 
 ---
 
-## 6. Backend Technology Comparison and Recommendation
+## 6. Assessment Integrity & Server-Side Verification
 
-### 6.1 Technology Evaluation
-
-| Dimension | Option A: Supabase (Recommended) | Option B: Custom Node.js + Express/Fastify + PostgreSQL |
+### 6.1 Two-Tier Evaluation Architecture
+| Attribute | Interactive Coding Exercises (Modules 1–9) | Verified Knowledge Checks & Milestone Assessments |
 |---|---|---|
-| **Architecture** | Managed PostgreSQL + PostgREST + GoTrue Auth + Realtime + Edge Functions. | Custom Node.js API server + ORM (Prisma/Drizzle) + PostgreSQL DB. |
-| **Authentication** | Built-in GoTrue (JWT, email confirmation, password reset, OAuth). | Requires manual setup (Passport/Lucia, email transport, token rotation). |
-| **Data Authorization** | Native PostgreSQL Row Level Security (RLS) enforced at the database kernel. | Application-layer middleware; vulnerability to authorization logic bugs. |
-| **Frontend Static Hosting** | **100% Compatible.** Client connects directly via `supabase-js` using public anon key. App stays static on Cloudflare/GitHub Pages. | Requires hosting, deploying, monitoring, and scaling a dedicated Node.js runtime container. |
-| **Local Development** | Supabase CLI runs exact local stack via Docker (`supabase start`). | Standard `docker-compose` with Node.js and Postgres. |
-| **Testing** | Standard Vitest integration tests against local Supabase instance. RLS testable via `pgTAP` or Node SDK. | Standard integration tests using Supertest and Vitest. |
-| **Maintenance Burden** | Minimal. Zero backend code to patch for security, routing, or connection pooling. | High. Must maintain Node.js dependencies, server security, TLS, rate limiters, Docker containers. |
-| **Free Tier Constraints** | 500MB database, 50,000 monthly active users, 2 projects. (Sufficient for initial 10,000+ learners). | VPS cost ($5–$10/month minimum) + database management. |
+| **Execution Context** | Client-Side Dedicated Web Worker | Server-Side PostgreSQL Function / Edge Function |
+| **Integrity Tier** | **Learner-Reported Practice** | **Authoritative Verified Result** |
+| **Security Rationale** | Preserves `constitution.md` §7; untrusted code never executes on server | Eliminates client-side answer key scraping |
+| **Answer Key Exposure** | N/A (Dynamic code validation rules) | **Never in client bundle**; private in DB |
+| **Storage Destination** | `exercise_attempts` (deferred / optional) | `assessment_attempts` (verified audit log) |
 
-### 6.2 Recommendation: Supabase
-**Supabase is decisively recommended** for the platform evolution:
-1. **Preserves Static Frontend:** The existing Vite build architecture remains deployable to GitHub Pages or Cloudflare Workers Static Assets with zero server hosting costs.
-2. **PostgreSQL Security Model:** Enforces security at the database layer via RLS policies. Even if client-side code is tampered with, the PostgreSQL engine refuses unauthorized reads or writes.
-3. **Reduced Code Surface:** Eliminates thousands of lines of boilerplate CRUD, JWT verification, and email reset code, letting development focus on curriculum and learner progress.
-4. **Smooth Migration Path:** If proprietary constraints ever dictate moving away from Supabase, the underlying database is pure, standard PostgreSQL with standard SQL migrations, readily portable to AWS RDS, Google Cloud SQL, or self-hosted PostgreSQL.
+### 6.2 Knowledge Check Server Grading Flow
+1. **Curriculum Delivery:** Client receives questions and multiple-choice options (`id`, `label`, `prompt`), but **not** `correctOptionId`.
+2. **Submission:** Upon completing the check, the client submits:
+   ```json
+   {
+     "assessment_id": "m7-l1-assessment",
+     "answers": {
+       "q1": "sync-end",
+       "q2": "promise-job",
+       "q3": "complete-order"
+     }
+   }
+   ```
+3. **Server Evaluation (`submit_assessment` RPC):**
+   - Retrieves encrypted/hashed correct answer key from `assessment_keys` table.
+   - Evaluates score mathematically.
+   - Records an immutable row in `assessment_attempts`.
+   - Returns `{ passed: true, score: 100.0, feedback: [...] }` to the client.
 
 ---
 
-## 7. Proposed Relational Database Architecture
-
-All database timestamps use `TIMESTAMPTZ` with `DEFAULT timezone('utc'::text, now())`. UUIDs use `gen_random_uuid()`.
+## 7. Hardened Database Architecture & Schemas
 
 ### 7.1 Entity-Relationship Overview
 
@@ -296,409 +262,475 @@ All database timestamps use `TIMESTAMPTZ` with `DEFAULT timezone('utc'::text, no
 erDiagram
     auth_users ||--|| profiles : "has profile"
     auth_users ||--o{ user_roles : "assigned"
-    auth_users ||--o{ lesson_progress : "tracks"
-    auth_users ||--o{ exercise_attempts : "records"
-    auth_users ||--o{ assessment_attempts : "submits"
-    auth_users ||--|| user_preferences : "configures"
+    auth_users ||--|| user_progress_summary : "summary cursor"
+    auth_users ||--o{ lesson_progress : "completed records"
+    auth_users ||--o{ assessment_attempts : "verified scores"
+    auth_users ||--|| user_preferences : "ui settings"
     
-    courses ||--o{ modules : "contains"
-    modules ||--o{ lessons : "contains"
-    lessons ||--o{ content_versions : "versions"
-    lessons ||--o{ lesson_progress : "referenced by"
-    lessons ||--o{ exercise_attempts : "referenced by"
-    lessons ||--o{ assessment_attempts : "referenced by"
+    curriculum_lessons ||--o{ lesson_progress : "validates lesson_id"
+    curriculum_lessons ||--o{ assessment_keys : "has assessment key"
+    assessment_keys ||--o{ assessment_attempts : "evaluates"
     
-    auth_users ||--o{ audit_logs : "performed by"
+    auth_users ||--o{ audit_logs : "tracks actions"
 ```
 
-### 7.2 MVP Database Tables (Release 1.0)
+### 7.2 Database Schema Definitions (PostgreSQL 15+)
 
-#### 1. `profiles`
-- **Purpose:** Stores public and semi-public learner identity linked to `auth.users`.
-- **Fields:**
-  - `id` (UUID, Primary Key, References `auth.users.id` ON DELETE CASCADE)
-  - `display_name` (TEXT, Nullable, max 50 chars)
-  - `avatar_url` (TEXT, Nullable)
-  - `created_at` (TIMESTAMPTZ, NOT NULL, DEFAULT now())
-  - `updated_at` (TIMESTAMPTZ, NOT NULL, DEFAULT now())
-- **Constraints & Indexes:**
-  - PK: `id`
-  - Index: `profiles_created_at_idx` ON `created_at`
-- **RLS Requirements:**
-  - `SELECT`: Authenticated users can view any profile (or only own profile if private).
-  - `UPDATE`: Authenticated users can only update their own profile (`auth.uid() = id`).
-  - `INSERT`: Created automatically via Postgres trigger on `auth.users` creation.
-
-#### 2. `user_roles`
-- **Purpose:** Manages system roles (`learner`, `content_editor`, `admin`).
-- **Fields:**
-  - `id` (UUID, Primary Key, DEFAULT gen_random_uuid())
-  - `user_id` (UUID, NOT NULL, References `auth.users.id` ON DELETE CASCADE)
-  - `role` (TEXT, NOT NULL, CHECK `role IN ('learner', 'content_editor', 'admin')`, DEFAULT `'learner'`)
-  - `created_at` (TIMESTAMPTZ, NOT NULL, DEFAULT now())
-- **Constraints & Indexes:**
-  - Unique: `(user_id, role)`
-  - Index: `user_roles_user_id_idx` ON `user_id`
-- **RLS Requirements:**
-  - `SELECT`: User can read their own roles (`auth.uid() = user_id`); Admins can read all.
-  - `INSERT / UPDATE / DELETE`: Denied to all client queries. Only modifiable via service-role key or admin RPC function.
-
-#### 3. `lesson_progress`
-- **Purpose:** Records lesson completion and active learning state per user.
-- **Fields:**
-  - `id` (UUID, Primary Key, DEFAULT gen_random_uuid())
-  - `user_id` (UUID, NOT NULL, References `auth.users.id` ON DELETE CASCADE)
-  - `lesson_id` (TEXT, NOT NULL) — e.g. `'m1-l1'`
-  - `status` (TEXT, NOT NULL, CHECK `status IN ('started', 'completed')`, DEFAULT `'completed'`)
-  - `completed_at` (TIMESTAMPTZ, Nullable)
-  - `created_at` (TIMESTAMPTZ, NOT NULL, DEFAULT now())
-  - `updated_at` (TIMESTAMPTZ, NOT NULL, DEFAULT now())
-- **Constraints & Indexes:**
-  - Unique: `(user_id, lesson_id)`
-  - Index: `lesson_progress_user_id_idx` ON `user_id`
-  - Index: `lesson_progress_lesson_id_idx` ON `lesson_id`
-- **RLS Requirements:**
-  - `SELECT`: Users read only their own records (`auth.uid() = user_id`).
-  - `INSERT / UPDATE`: Users upsert only their own records (`auth.uid() = user_id`).
-  - `DELETE`: Users can delete their own records (reset progress).
-
-#### 4. `user_preferences`
-- **Purpose:** Stores user interface and editor preferences across devices.
-- **Fields:**
-  - `user_id` (UUID, Primary Key, References `auth.users.id` ON DELETE CASCADE)
-  - `theme` (TEXT, NOT NULL, DEFAULT `'dark'`, CHECK `theme IN ('dark', 'light', 'system')`)
-  - `font_size` (INTEGER, NOT NULL, DEFAULT 14, CHECK `font_size BETWEEN 10 AND 24`)
-  - `active_lesson_id` (TEXT, NOT NULL, DEFAULT `'m1-l1'`)
-  - `updated_at` (TIMESTAMPTZ, NOT NULL, DEFAULT now())
-- **RLS Requirements:**
-  - `ALL`: Restricted to `auth.uid() = user_id`.
-
-### 7.3 Subsequent Release Tables (Release 2.0)
-
-#### 5. `exercise_attempts`
-- **Purpose:** Audit history of code submissions and exercise executions.
-- **Fields:**
-  - `id` (UUID, Primary Key, DEFAULT gen_random_uuid())
-  - `user_id` (UUID, NOT NULL, References `auth.users.id` ON DELETE CASCADE)
-  - `lesson_id` (TEXT, NOT NULL)
-  - `exercise_id` (TEXT, NOT NULL)
-  - `passed` (BOOLEAN, NOT NULL)
-  - `code_snippet` (TEXT, NOT NULL) — Capped at 10,000 chars
-  - `execution_time_ms` (INTEGER, Nullable)
-  - `error_type` (TEXT, Nullable)
-  - `created_at` (TIMESTAMPTZ, NOT NULL, DEFAULT now())
-- **Indexes:**
-  - Index: `exercise_attempts_user_lesson_idx` ON `(user_id, lesson_id)`
-- **RLS Requirements:**
-  - `SELECT`: User views own attempts; Admins view all.
-  - `INSERT`: User inserts own attempts. No client `UPDATE` or `DELETE` allowed.
-
-#### 6. `assessment_attempts`
-- **Purpose:** Records knowledge-check quiz submissions and scores.
-- **Fields:**
-  - `id` (UUID, Primary Key, DEFAULT gen_random_uuid())
-  - `user_id` (UUID, NOT NULL, References `auth.users.id` ON DELETE CASCADE)
-  - `lesson_id` (TEXT, NOT NULL)
-  - `assessment_id` (TEXT, NOT NULL)
-  - `answers` (JSONB, NOT NULL) — e.g. `{"q1": "sync-end", "q2": "promise-job"}`
-  - `score` (NUMERIC(5,2), NOT NULL) — e.g. 100.00
-  - `passed` (BOOLEAN, NOT NULL)
-  - `created_at` (TIMESTAMPTZ, NOT NULL, DEFAULT now())
-- **RLS Requirements:**
-  - `SELECT`: User views own; Admins view all.
-  - `INSERT`: User inserts own.
-
-### 7.4 Future Release Tables (Release 3.0+ / CMS & Audit)
-
-#### 7. `courses`, `modules`, `lessons`, and `content_versions`
-- **Purpose:** Migrates static JavaScript content files (`m1-l1.js`) into a database-backed Content Management System.
-- **Key Relationships:**
-  - `courses` 1 : N `modules`
-  - `modules` 1 : N `lessons`
-  - `lessons` 1 : N `content_versions`
-- **RLS Requirements:**
-  - Public read access for published lessons; write access restricted to `content_editor` and `admin` roles.
-
-#### 8. `audit_logs`
-- **Purpose:** Immutable compliance log recording sensitive administrator operations.
-- **Fields:**
-  - `id` (UUID, Primary Key)
-  - `admin_id` (UUID, References `auth.users.id`)
-  - `action` (TEXT, NOT NULL) — e.g. `'BAN_USER'`, `'UPDATE_ROLE'`
-  - `target_id` (TEXT, NOT NULL)
-  - `payload` (JSONB)
-  - `ip_address` (INET)
-  - `created_at` (TIMESTAMPTZ, NOT NULL, DEFAULT now())
-- **RLS Requirements:**
-  - Only accessible by `admin`. No updates or deletions permitted.
-
----
-
-## 8. Security and Privacy Architecture
-
-```
-┌────────────────────────────────────────────────────────────────────────┐
-│                        SECURITY PERIMETER                              │
-├────────────────────────────────────────────────────────────────────────┤
-│  BROWSER CONTEXT                                                       │
-│  ┌───────────────────────┐         ┌───────────────────────────────┐  │
-│  │ Platform Host UI      │         │ Isolated Web Worker           │  │
-│  │ (CodeMirror, Progress)│◄───────►│ (Untrusted Student JS)        │  │
-│  │ Holds: Supabase Anon  │ postMsg │ NO Network, NO Storage, NO DOM│  │
-│  └───────────┬───────────┘         └───────────────────────────────┘  │
-│              │ HTTPS                                                   │
-├──────────────┼─────────────────────────────────────────────────────────┤
-│  SUPABASE / POSTGRES                                                   │
-│              ▼                                                         │
-│  ┌──────────────────────────────────────────────────────────────────┐  │
-│  │ API Gateway & GoTrue Auth (Rate Limiting, JWT Validation)        │  │
-│  ├──────────────────────────────────────────────────────────────────┤  │
-│  │ PostgreSQL Kernel with Row Level Security (RLS)                  │  │
-│  │ • Learners isolated by auth.uid()                                │  │
-│  │ • Admins verified via user_roles / custom security definer func │  │
-│  │ • Service-Role Key isolated from client bundles                  │  │
-│  └──────────────────────────────────────────────────────────────────┘  │
-└────────────────────────────────────────────────────────────────────────┘
-```
-
-### 8.1 Untrusted Learner Code Execution: Absolute Client-Side Isolation
-- **Preservation Principle:** In compliance with `constitution.md` § Principle VIII & §7, student-submitted code is **never sent to or executed on the backend**.
-- Moving execution to the backend would introduce catastrophic remote code execution (RCE) risks, container escape risks, and massive compute costs.
-- The existing browser-based Web Worker architecture (with stripped global capabilities and parent-thread watchdog termination) remains the sole execution engine.
-
-### 8.2 API Keys & Credential Hygiene
-- **Public Anon Key (`VITE_SUPABASE_ANON_KEY`):**
-  - Safe for client-side inclusion. It acts only as an identifier and is strictly constrained by PostgreSQL RLS.
-- **Service-Role Key (`SUPABASE_SERVICE_ROLE_KEY`):**
-  - **NEVER** placed in frontend source code, environment variables prefixed with `VITE_`, or client bundles.
-  - Used exclusively in secure server-side environments (Supabase Edge Functions or administrative deployment scripts).
-
-### 8.3 Row Level Security (RLS) Policies
-Every table has RLS explicitly enabled:
+#### 1. Canonical Curriculum Seed Table (`curriculum_lessons`)
+Ensures foreign-key referential integrity for all lesson references:
 ```sql
-ALTER TABLE lesson_progress ENABLE ROW LEVEL SECURITY;
+CREATE TABLE public.curriculum_lessons (
+    id TEXT PRIMARY KEY, -- e.g. 'm1-l1'
+    module_id TEXT NOT NULL,
+    title TEXT NOT NULL,
+    sequence_order INTEGER NOT NULL UNIQUE,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+-- Seeded with all 64 canonical lessons from curriculum-spec.md
 ```
-Example policy strictly enforcing user isolation:
+
+#### 2. User Profiles (`profiles`)
+**Privacy Hardened:** Profiles are private by default.
 ```sql
-CREATE POLICY "Learners can manage own progress"
-ON lesson_progress
+CREATE TABLE public.profiles (
+    id UUID PRIMARY KEY REFERENCES auth.users(id) ON DELETE CASCADE,
+    display_name TEXT CHECK (char_length(display_name) <= 50),
+    avatar_url TEXT CHECK (avatar_url ~ '^https?://'),
+    is_public BOOLEAN NOT NULL DEFAULT false,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+ALTER TABLE public.profiles ENABLE ROW LEVEL SECURITY;
+
+-- Owner can read/update own profile
+CREATE POLICY "Users can manage own profile"
+ON public.profiles
+FOR ALL
+TO authenticated
+USING (auth.uid() = id)
+WITH CHECK (auth.uid() = id);
+
+-- Public can only read profiles explicitly marked public
+CREATE POLICY "Public can view public profiles"
+ON public.profiles
+FOR SELECT
+TO authenticated, anon
+USING (is_public = true);
+```
+
+#### 3. User Progress Summary & Reset Cursor (`user_progress_summary`)
+Decouples progress cursor from UI preferences and manages reset epochs:
+```sql
+CREATE TABLE public.user_progress_summary (
+    user_id UUID PRIMARY KEY REFERENCES auth.users(id) ON DELETE CASCADE,
+    active_lesson_id TEXT NOT NULL REFERENCES public.curriculum_lessons(id) DEFAULT 'm1-l1',
+    completed_count INTEGER NOT NULL DEFAULT 0 CHECK (completed_count >= 0 AND completed_count <= 64),
+    sync_revision BIGINT NOT NULL DEFAULT 1,
+    last_reset_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+ALTER TABLE public.user_progress_summary ENABLE ROW LEVEL SECURITY;
+
+CREATE POLICY "Users manage own progress summary"
+ON public.user_progress_summary
 FOR ALL
 TO authenticated
 USING (auth.uid() = user_id)
 WITH CHECK (auth.uid() = user_id);
 ```
 
-### 8.4 Administrator Privilege Verification
-To eliminate privilege escalation:
-- Roles are never stored in user-editable tables or client-controlled JWT metadata.
-- Secure Postgres Security Definer helper:
-  ```sql
-  CREATE OR REPLACE FUNCTION is_admin()
-  RETURNS BOOLEAN AS $$
-  BEGIN
+#### 4. Individual Lesson Progress (`lesson_progress`)
+```sql
+CREATE TABLE public.lesson_progress (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    user_id UUID NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE,
+    lesson_id TEXT NOT NULL REFERENCES public.curriculum_lessons(id) ON DELETE RESTRICT,
+    completed_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    client_recorded_at TIMESTAMPTZ,
+    source TEXT NOT NULL CHECK (source IN ('app_sync', 'guest_migration')) DEFAULT 'app_sync',
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    CONSTRAINT uq_user_lesson UNIQUE (user_id, lesson_id)
+);
+
+CREATE INDEX idx_lesson_progress_user ON public.lesson_progress(user_id);
+CREATE INDEX idx_lesson_progress_lesson ON public.lesson_progress(lesson_id);
+
+ALTER TABLE public.lesson_progress ENABLE ROW LEVEL SECURITY;
+
+CREATE POLICY "Users manage own lesson progress"
+ON public.lesson_progress
+FOR ALL
+TO authenticated
+USING (auth.uid() = user_id)
+WITH CHECK (auth.uid() = user_id);
+```
+
+#### 5. User Roles & Hardened Security Definer (`user_roles`)
+```sql
+CREATE TYPE public.app_role AS ENUM ('learner', 'content_editor', 'admin');
+
+CREATE TABLE public.user_roles (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    user_id UUID NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE,
+    role public.app_role NOT NULL DEFAULT 'learner',
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    CONSTRAINT uq_user_role UNIQUE (user_id, role)
+);
+
+CREATE INDEX idx_user_roles_lookup ON public.user_roles(user_id, role);
+
+ALTER TABLE public.user_roles ENABLE ROW LEVEL SECURITY;
+
+-- Learners can only view their own roles
+CREATE POLICY "Users can read own roles"
+ON public.user_roles
+FOR SELECT
+TO authenticated
+USING (auth.uid() = user_id);
+
+-- Hardened Security Definer Helper for Role Checking
+CREATE OR REPLACE FUNCTION public.is_admin()
+RETURNS BOOLEAN
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = pg_catalog, public
+AS $$
+BEGIN
     RETURN EXISTS (
-      SELECT 1 FROM user_roles
-      WHERE user_id = auth.uid() AND role = 'admin'
+        SELECT 1 FROM public.user_roles
+        WHERE user_id = auth.uid() AND role = 'admin'::public.app_role
     );
-  END;
-  $$ LANGUAGE plpgsql SECURITY DEFINER;
-  ```
-- Admin-only RLS policies call `is_admin()`.
+END;
+$$;
 
-### 8.5 Input Validation & Rate Limiting
-- **Client & Server Validation:** Code snippets submitted for attempt history are capped at 10,000 characters. Input fields are sanitized.
-- **Rate Limiting:** Managed at the API gateway layer (Supabase Kong API Gateway):
-  - Auth endpoints (login/signup): Max 30 requests/minute per IP to prevent credential stuffing.
-  - Progress updates: Debounced client-side (1,500ms); rate-limited to 60 requests/minute per user.
+-- Restrict function execution
+REVOKE ALL ON FUNCTION public.is_admin() FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION public.is_admin() TO authenticated;
+```
 
-### 8.6 Privacy, GDPR Compliance & Account Deletion
-- **Data Minimization:** No personal data collected for guests. For registered users, only email and optional display name are collected.
-- **Self-Service Account Deletion:** Triggering account deletion invokes `supabase.rpc('delete_user_account')` or cascades from `auth.users`, automatically removing:
-  - `profiles`
-  - `user_roles`
-  - `lesson_progress`
-  - `exercise_attempts`
-  - `assessment_attempts`
-  - `user_preferences`
-- **Data Export:** Learners can export their progress and attempt history as a standard JSON document.
+#### 6. User Preferences (`user_preferences`)
+Strictly isolated to UI and editor preferences:
+```sql
+CREATE TABLE public.user_preferences (
+    user_id UUID PRIMARY KEY REFERENCES auth.users(id) ON DELETE CASCADE,
+    theme TEXT NOT NULL DEFAULT 'dark' CHECK (theme IN ('dark', 'light', 'system')),
+    font_size INTEGER NOT NULL DEFAULT 14 CHECK (font_size BETWEEN 10 AND 24),
+    editor_word_wrap BOOLEAN NOT NULL DEFAULT true,
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+ALTER TABLE public.user_preferences ENABLE ROW LEVEL SECURITY;
+
+CREATE POLICY "Users manage own preferences"
+ON public.user_preferences
+FOR ALL
+TO authenticated
+USING (auth.uid() = user_id)
+WITH CHECK (auth.uid() = user_id);
+```
+
+#### 7. Assessment Answer Keys & Attempts (`assessment_keys`, `assessment_attempts`)
+```sql
+CREATE TABLE public.assessment_keys (
+    assessment_id TEXT PRIMARY KEY,
+    lesson_id TEXT NOT NULL REFERENCES public.curriculum_lessons(id),
+    correct_answers JSONB NOT NULL, -- Private key: {"q1": "sync-end", "q2": "promise-job"}
+    passing_score NUMERIC(5,2) NOT NULL DEFAULT 100.00,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+ALTER TABLE public.assessment_keys ENABLE ROW LEVEL SECURITY;
+-- No client can select from assessment_keys; accessible only by server-side RPC functions
+
+CREATE TABLE public.assessment_attempts (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    user_id UUID NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE,
+    assessment_id TEXT NOT NULL REFERENCES public.assessment_keys(assessment_id),
+    answers JSONB NOT NULL,
+    score NUMERIC(5,2) NOT NULL,
+    passed BOOLEAN NOT NULL,
+    evaluated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+ALTER TABLE public.assessment_attempts ENABLE ROW LEVEL SECURITY;
+
+CREATE POLICY "Users read own assessment attempts"
+ON public.assessment_attempts
+FOR SELECT
+TO authenticated
+USING (auth.uid() = user_id);
+```
 
 ---
 
-## 9. Phased Implementation Roadmap
+## 8. Administrative Security & Privileged Operations
+
+### 8.1 Out-of-Band Initial Admin Bootstrapping
+- **Vulnerability Blocked:** Insecure public signup endpoints with role parameters.
+- **Approved Bootstrap Procedure:**
+  1. The initial administrator registers normally via the standard auth flow as a standard learner.
+  2. The platform owner runs a dedicated, out-of-band SQL migration or executes via Supabase CLI / Dashboard SQL Editor:
+     ```sql
+     INSERT INTO public.user_roles (user_id, role)
+     VALUES ('<target-uuid>', 'admin'::public.app_role)
+     ON CONFLICT (user_id, role) DO NOTHING;
+     ```
+  3. No HTTP endpoint exists that can assign the `admin` role without active caller verification via `is_admin()`.
+
+### 8.2 Privileged RPC Function Hardening
+Every administrative function enforces:
+1. `SECURITY DEFINER`.
+2. `SET search_path = pg_catalog, public`.
+3. Fully qualified table names.
+4. Active caller check: `IF NOT public.is_admin() THEN RAISE EXCEPTION 'Access denied'; END IF;`.
+5. Automatic insert into `public.audit_logs`.
+
+---
+
+## 9. Server-Side Account Deletion Procedure
+
+```
+[Learner Clicks "Delete Account" in UI]
+                  │
+                  ▼
+[Confirm Password Re-Authentication]
+                  │
+                  ▼
+[Invoke Supabase Edge Function: delete-account]
+  • Payload: Bearer JWT
+                  │
+                  ▼
+[Edge Function Verification]
+  • Verify caller JWT via GoTrue
+  • Extract auth.uid()
+                  │
+                  ▼
+[Invoke Supabase Admin API]
+  • supabaseAdmin.auth.admin.deleteUser(uid)
+                  │
+                  ▼
+[PostgreSQL Database Cascade]
+  • auth.users row deleted
+  • CASCADE automatically deletes:
+    - profiles
+    - user_roles
+    - user_progress_summary
+    - lesson_progress
+    - assessment_attempts
+    - user_preferences
+                  │
+                  ▼
+[Edge Function Response 200 OK]
+                  │
+                  ▼
+[Client Teardown]
+  • Clear auth session & refresh tokens
+  • Clear jslearn_account_<uid>_* from localStorage
+  • Reset UI to pristine Guest mode
+```
+
+**Security Invariants:**
+- Frontend client **never** receives or stores the `SUPABASE_SERVICE_ROLE_KEY`.
+- Deletion is unrecoverable and strictly cascades across all relational child records.
+
+---
+
+## 10. Curriculum CMS & Declarative Content Boundaries
+
+```
+┌────────────────────────────────────────────────────────────────────────┐
+│                        CURRICULUM ARCHITECTURE                         │
+├──────────────────────────────────┬─────────────────────────────────────┤
+│  VERSION-CONTROLLED REPOSITORY   │  DATABASE CMS (FUTURE PHASE 7)      │
+│  (Trusted Executable Logic)      │  (Declarative Copy & Metadata Only) │
+├──────────────────────────────────┼─────────────────────────────────────┤
+│ • Exercise code validators       │ • Lesson title & module titles      │
+│ • Worker execution boundaries    │ • Learning objectives copy          │
+│ • Acorn AST parsing & policies   │ • Markdown explanation sections     │
+│ • Vitest content test suites     │ • Starter code template strings     │
+│ • Async fetch bridge allowlists  │ • Progressive hint strings          │
+│ • Playground runner protocols    │ • Estimated completion minutes      │
+└──────────────────────────────────┴─────────────────────────────────────┘
+```
+
+**Security Invariant:** Under no circumstances will database-stored JavaScript code strings be dynamically evaluated (`eval()`, `new Function()`) in the application context.
+
+---
+
+## 11. Deployment, Security Perimeter & Content Security Policy
+
+### 11.1 Hosting Capability Comparison
+| Capability | GitHub Pages | Cloudflare Workers / Cloudflare Pages |
+|---|---|---|
+| **Static HTML/JS/CSS Delivery** | Supported | Supported |
+| **Custom HTTP Response Headers** | **Unsupported** | **Supported** via `_headers` / Worker response |
+| **Worker Script Headers** | **Unsupported** | **Supported** (`Content-Security-Policy` per script) |
+| **HSTS Enforcement** | GitHub managed | Supported via custom header |
+| **Permissions-Policy** | Unsupported | Supported |
+
+### 11.2 Content Security Policy Updates for Supabase
+The application CSP must permit Supabase REST endpoints, GoTrue auth, and WebSocket Realtime connections:
+
+```http
+Content-Security-Policy: 
+  default-src 'none'; 
+  script-src 'self' 'unsafe-eval'; 
+  worker-src 'self' blob:; 
+  style-src 'self' 'unsafe-inline'; 
+  img-src 'self' data: blob:; 
+  connect-src 'self' https://*.supabase.co wss://*.supabase.co https://jsonplaceholder.typicode.com; 
+  object-src 'none'; 
+  base-uri 'none'; 
+  form-action 'none'; 
+  frame-src 'none'; 
+  frame-ancestors 'none';
+```
+
+### 11.3 Defense-in-Depth Principle
+CORS headers protect browsers from cross-origin theft, but do not prevent direct API calls from curl, Postman, or malicious automation. Therefore:
+- **PostgreSQL Row Level Security (RLS) is the definitive authorization boundary.**
+- Direct API calls without valid user JWTs return zero data, regardless of client origin or spoofed headers.
+
+---
+
+## 12. Phased Implementation Roadmap with Pervasive Security Gates
 
 ```mermaid
 flowchart TD
-    P0["Phase 0: Architecture & Plan<br/>(Current Read-Only Baseline)"] --> P1["Phase 1: Backend Foundation & DB<br/>(Supabase Setup, Migrations, Local Dev)"]
-    P1 --> P2["Phase 2: Auth & Profiles<br/>(Sign-up, Login, Session UI)"]
-    P2 --> P3["Phase 3: Guest Migration<br/>(LocalStorage -> Cloud Merge)"]
-    P3 --> P4["Phase 4: Cloud Progress Sync<br/>(Bidirectional Sync & Offline Resiliency)"]
-    P4 --> P5["Phase 5: Exercise & Assessment History<br/>(Attempt Logging & Score History)"]
-    P5 --> P6["Phase 6: Admin Dashboard & RBAC<br/>(User Management & Role Security)"]
-    P6 --> P7["Phase 7: Curriculum CMS & Versions<br/>(Dynamic Content & Publishing)"]
-    P7 --> P8["Phase 8: Security & Production Hardening<br/>(Pen-test, Audit, CSP, Launch)"]
+    P0["Phase 0.1: Architecture Review & Corrections<br/>(Current Read-Only Baseline)"] --> P1["Phase 1: Backend Foundation & DB<br/>(Supabase Setup, Canonical Seed, Hardened RLS)"]
+    P1 --> P2["Phase 2: Auth, Verification & Profiles<br/>(GoTrue, Email Verification, Private Profiles)"]
+    P2 --> P3["Phase 3: Guest-to-Account Migration<br/>(Storage Isolation & RPC Merge Engine)"]
+    P3 --> P4["Phase 4: Progress Sync & Reset Epochs<br/>(State Reconciliation & Offline Queue)"]
+    P4 --> P5["Phase 5: Verified Assessments & History<br/>(Server-Side Knowledge Check Grading)"]
+    P5 --> P6["Phase 6: Admin Dashboard & RBAC<br/>(Bootstrapped Admin & Audit Logging)"]
+    P6 --> P7["Phase 7: Declarative Curriculum CMS<br/>(Content DB & Static Fallback)"]
+    P7 --> P8["Phase 8: Production Readiness & Audits<br/>(CSP Headers, Penetration Tests, Launch)"]
 ```
 
-### Phase 0: Requirements and Architecture (CURRENT PHASE)
-- **Status:** **COMPLETE** (Read-Only Audit & Specification).
-- **Scope:** Source code inspection, requirements breakdown, tech comparison, database schema design, and roadmap. Zero code modifications.
+### Phase 0.1: Architecture Review & Corrections (CURRENT PHASE)
+- **Status:** **COMPLETE** (Read-Only Planning).
+- **Scope:** Review, corrections, hardened schema design, ADR formulation. Zero code modified.
 
 ---
 
 ### Phase 1: Backend Foundation and Database
-- **Objectives:** Initialize Supabase infrastructure, configure local development via Docker CLI, and write SQL migrations for MVP tables.
+- **Objectives:** Initialize Supabase infrastructure, configure local development via Supabase CLI, and write idempotent SQL migrations.
 - **Scope:**
-  - Supabase CLI setup (`supabase/config.toml`).
-  - Migration script creating `profiles`, `user_roles`, `lesson_progress`, `user_preferences`.
-  - Enable RLS and define baseline security policies.
-  - Automated database integration tests (verifying RLS isolation).
-- **Dependencies:** Approval of Phase 0 architecture.
-- **Affected Files:** New folder `supabase/migrations/`, `supabase/seed.sql`, test scripts. (No frontend changes).
-- **Acceptance Criteria:**
-  - Local Supabase instance runs via `supabase start`.
-  - Migrations apply cleanly and idempotently.
-  - RLS verification tests confirm unauthorized users cannot read or write foreign rows.
-- **Risks & Rollback:** Zero frontend risk. Rollback by resetting local database via `supabase db reset`.
+  - Create `curriculum_lessons`, `profiles`, `user_roles`, `user_progress_summary`, `lesson_progress`, `user_preferences`.
+  - Seed `curriculum_lessons` with all 64 canonical lessons.
+  - Implement hardened `is_admin()` function with `search_path = pg_catalog, public`.
+  - Define RLS policies on all tables.
+- **Embedded Security Gate:** Automated pgTAP / Node.js test suite proving that unauthenticated callers and unauthorized users cannot select or insert foreign rows.
+- **Rollback:** `supabase db reset`.
 
 ---
 
-### Phase 2: Authentication and User Profiles
-- **Objectives:** Introduce user sign-up, sign-in, sign-out, password reset, and profile management into the application interface.
+### Phase 2: Authentication, Email Verification and User Profiles
+- **Objectives:** User sign-up, sign-in, password reset, and private profile management.
 - **Scope:**
   - Install `@supabase/supabase-js`.
-  - Create Auth Service (`src/services/auth.js`) managing active session state and auth listeners.
-  - Implement accessible authentication UI modal or header controls (Login / Sign Up / Profile dropdown).
-  - Profile editing (display name).
-- **Dependencies:** Phase 1 completion.
-- **Affected Files:** `app/src/services/auth.js`, `app/src/components/auth-modal.js`, `app/src/app.js`, `app/src/style.css`.
-- **Database Changes:** Trigger on `auth.users` to automatically populate `profiles` and `user_roles` with `'learner'`.
-- **Acceptance Criteria:**
-  - Guest can register with email and password.
-  - Confirmation email dispatched.
-  - Login persists session across reloads.
-  - Logout clears active session cleanly.
-- **Required Tests:** Unit tests for Auth Service; Playwright E2E tests for registration and login workflows.
-- **Security Considerations:** Ensure no tokens or passwords leak to console logs or untrusted worker contexts.
+  - Implement Auth Service with session persistence and silent token rotation.
+  - Accessible login/signup modal with email verification banners.
+  - Enforce email verification check before allowing cloud sync activation.
+- **Embedded Security Gate:** Verification that unverified users cannot initiate cloud progress writes; verification that passwords and tokens are never relayed to Web Workers or console logs.
 
 ---
 
-### Phase 3: Guest-to-Account Migration
-- **Objectives:** Seamlessly merge local guest progress into newly registered or logged-in accounts.
+### Phase 3: Guest Storage Isolation & Migration Engine
+- **Objectives:** Establish disjoint storage namespaces and migrate guest progress seamlessly upon registration.
 - **Scope:**
-  - Create Migration Engine (`src/services/migration.js`).
-  - Detect `jslearn_progress_v1` on auth state change (`SIGNED_IN`).
-  - Perform Set Union merge with cloud records.
-  - Persist merged union to database and refresh `localStorage`.
-- **Dependencies:** Phase 2 completion.
-- **Affected Files:** `app/src/services/migration.js`, `app/src/progress.js`, `app/src/app.js`.
-- **Database Changes:** Postgres RPC function `merge_user_progress(lesson_ids TEXT[])` for atomic execution.
-- **Acceptance Criteria:**
-  - Guest completes Lessons 1–3, creates an account; cloud immediately stores Lessons 1–3.
-  - If cloud already had Lesson 4, user now has Lessons 1–4 on both device and cloud.
-  - Zero data loss or progress rollback.
-- **Required Tests:** Unit tests with mock localStorage; E2E tests verifying multi-device progress union.
+  - Migrate storage from `jslearn_progress_v1` to `jslearn_guest_progress_v1` and `jslearn_account_<uid>_progress_v1`.
+  - Create atomic RPC `migrate_guest_progress(lesson_ids)` tagging `source = 'guest_migration'`.
+  - Ensure shared-computer isolation on sign-out.
+- **Embedded Security Gate:** Multi-user shared computer test proving User A cannot see User B's completions after logout.
 
 ---
 
-### Phase 4: Cloud Progress Synchronization
-- **Objectives:** Real-time and background progress synchronization with offline resilience.
+### Phase 4: Cloud Progress Synchronization & Reset Epochs
+- **Objectives:** Real-time progress synchronization with offline queue and atomic reset epochs.
 - **Scope:**
-  - Refactor `app/src/progress.js` to coordinate between `localStorage` (cache) and Supabase (remote).
-  - Queue offline completions and drain queue when `navigator.onLine` fires.
-  - Update header progress indicator (`X/64`) based on synced state.
-- **Dependencies:** Phase 3 completion.
-- **Affected Files:** `app/src/progress.js`, `app/src/services/sync.js`, `app/src/app.js`.
-- **Acceptance Criteria:**
-  - Completing an exercise immediately updates local UI and asynchronously persists to cloud.
-  - Logging in on a second device displays identical completion count without manual refresh.
-  - Network disconnection does not block exercise completion; syncs upon reconnect.
-- **Required Tests:** Offline network simulation tests in Playwright.
+  - Implement client sync coordinator with offline queue (`jslearn_account_<uid>_queue_v1`).
+  - Implement `reset_user_progress()` updating `last_reset_at`.
+  - Implement stale device rejection when `client_recorded_at < last_reset_at`.
+- **Embedded Security Gate:** Offline network replay tests proving stale devices cannot resurrect wiped progress.
 
 ---
 
-### Phase 5: Exercise and Assessment History
-- **Objectives:** Persist code submissions, execution status, and quiz responses for analytics and review.
+### Phase 5: Verified Assessments and History
+- **Objectives:** Server-side grading of knowledge checks and persistent milestone assessment scoring.
 - **Scope:**
-  - Apply Release 2.0 migrations (`exercise_attempts`, `assessment_attempts`).
-  - Record code snapshots upon successful exercise completion.
-  - Record multiple-choice knowledge check selections.
-  - Add learner history modal showing past attempts.
-- **Dependencies:** Phase 4 completion.
-- **Affected Files:** `app/src/components/playground.js`, `app/src/components/knowledge-check.js`, `app/src/services/history.js`.
-- **Acceptance Criteria:**
-  - Failed and successful runs recorded with timestamp and error categorization.
-  - Learners can view their previously submitted working solution.
-- **Required Tests:** Unit tests for history persistence and payload truncation (max 10,000 chars).
+  - Deploy `assessment_keys` and `assessment_attempts` tables.
+  - Deploy server-side `submit_assessment()` RPC function.
+  - Strip private answer keys from client curriculum bundles for verified assessments.
+  - Record code snapshots for completed lessons (disabled by default; opt-in).
+- **Embedded Security Gate:** Verification that inspecting frontend network bundles reveals zero answers to graded assessments.
 
 ---
 
-### Phase 6: Administration and Role-Based Access
-- **Objectives:** Build an administrative console to manage learners, roles, and platform metrics.
+### Phase 6: Administration and Role-Based Access Control
+- **Objectives:** Administrative dashboard, learner inspection, user moderation, and audit logs.
 - **Scope:**
   - Admin layout and routes (`/admin`).
-  - Learner table with search, completion stats, and account moderation.
-  - Security audit confirming unprivileged users cannot access `/admin` or invoke admin RPCs.
-- **Dependencies:** Phase 5 completion.
-- **Affected Files:** `app/src/components/admin/*`, `app/src/services/admin.js`.
-- **Database Changes:** Admin RPC functions (`get_platform_metrics`, `set_user_role`).
-- **Acceptance Criteria:**
-  - Only users with `user_roles.role = 'admin'` can load the admin panel.
-  - Tampering with client state triggers 403 Forbidden from Postgres RLS.
-- **Required Tests:** Security penetration tests attempting unauthorized privilege escalation.
+  - Out-of-band admin bootstrapping script.
+  - Administrative RPCs protected by `is_admin()` and logged in `audit_logs`.
+- **Embedded Security Gate:** Penetration testing confirming non-admin users receive 403 Forbidden on all admin endpoints.
 
 ---
 
-### Phase 7: Curriculum and Content Management (CMS)
-- **Objectives:** Enable dynamic lesson editing, versioning, and draft publication via database.
+### Phase 7: Declarative Curriculum CMS
+- **Objectives:** Manage declarative lesson content via database with static bundle fallback.
 - **Scope:**
-  - Apply Release 3.0 migrations (`courses`, `modules`, `lessons`, `content_versions`).
-  - Create hybrid content loader: fetch from database with fallback to static bundles (`src/content/`).
-  - Content editor interface for staging new lessons.
-- **Dependencies:** Phase 6 completion.
-- **Affected Files:** `app/src/content/index.js`, `app/src/services/content.js`.
-- **Acceptance Criteria:**
-  - Editing a lesson via CMS updates content for learners without requiring a frontend redeployment.
-  - Platform remains 100% functional offline using static fallback bundles.
-- **Required Tests:** Fallback tests simulating database downtime.
+  - Deploy declarative content tables.
+  - Hybrid content loader (database fetch with instant fallback to `src/content/`).
+  - Content editor role and interface for staging new lesson copy.
+- **Embedded Security Gate:** Proof that dynamic execution of database content is impossible; validators remain in Git.
 
 ---
 
-### Phase 8: Security Hardening and Production Readiness
-- **Objectives:** Production deployment verification, CSP tightening, penetration testing, and launch.
+### Phase 8: Production Readiness, Security Hardening & Deployment
+- **Objectives:** Final security audit, CSP verification, cross-browser certification, and production launch.
 - **Scope:**
-  - Update production Content Security Policy (`connect-src` allowing Supabase project URL).
-  - Enforce SSL, HSTS, and strict CORS.
-  - Conduct full accessibility (WCAG AA) and cross-browser regression test (Chrome, Edge, Firefox, Safari).
+  - Configure production CSP headers for Supabase.
+  - Real-browser automated testing on desktop Chrome, Edge, Firefox, and Safari.
+  - Deploy to Cloudflare Workers Static Assets or GitHub Pages.
   - Final release checklist sign-off.
-- **Dependencies:** Phases 1–7.
-- **Affected Files:** `app/index.html`, `app/vite.config.js`, `app/public/_headers`, `release-checklist.md`.
-- **Acceptance Criteria:**
-  - 100% passing automated test suite (Vitest + Playwright).
-  - Zero critical or high security vulnerabilities.
-  - Production deployment verified on Cloudflare Workers Static Assets or GitHub Pages.
+- **Embedded Security Gate:** Penetration testing, RLS audit, secret-leak scans, and WCAG AA accessibility audit.
 
 ---
 
-## 10. Open Architectural Questions and Decisions Requiring Approval
+## 13. Distinguishing Decision Status
 
-The following architectural questions and decision gates are submitted for user review and approval prior to beginning Phase 1 implementation:
+### Approved Decisions
+- Supabase selected as backend platform.
+- Client-side Web Worker code execution strictly preserved.
+- Dual-tier support for guests and registered users.
+- Email verification mandatory before cloud progress synchronization.
+- Guest storage isolated from authenticated user caches.
+- Code snapshot persistence deferred and disabled by default.
+- Content-editor and admin features deferred to subsequent phases (Phases 6 & 7).
+- Profiles private by default.
+- Declarative CMS only; executable validators stay in Git.
 
-### Decision Gate 1: Supabase vs Custom Node.js Backend
-- **Proposal:** Adopt Supabase (Managed Postgres + GoTrue + RLS) to preserve static frontend hosting (GitHub Pages / Cloudflare) and avoid server maintenance.
-- **Question for User:** Do you confirm Supabase as the platform backend, or do your organizational constraints require an in-house custom Node.js/Express API server?
+### Proposed Design Details (Ready for Phase 1 Implementation)
+- Storage key taxonomy: `jslearn_guest_progress_v1`, `jslearn_account_<uid>_progress_v1`, etc.
+- Database schemas with `curriculum_lessons` seed table for referential integrity.
+- Epoch-based progress resets via `user_progress_summary.last_reset_at`.
+- Server-side grading for knowledge checks via `submit_assessment()`.
+- Hardened `SECURITY DEFINER` function template with `search_path = pg_catalog, public`.
+- Server-side account deletion via Edge Function using `supabaseAdmin.auth.admin.deleteUser`.
 
-### Decision Gate 2: Email Verification Requirement for MVP
-- **Proposal:** Require email verification for password recovery and account deletion, but allow immediate platform access and cloud sync upon initial registration before email confirmation is clicked.
-- **Question for User:** Should email confirmation be a hard blocker before any cloud synchronization can occur, or should learners experience a frictionless onboarding with background confirmation?
+### Deferred to Future Releases
+- Social OAuth sign-in (Release 2.0).
+- Detailed exercise code attempt history (Release 2.0).
+- Multi-course curriculum expansion (Release 3.0+).
+- Realtime peer collaboration or social leaderboards (Release 3.0+).
 
-### Decision Gate 3: Inactive Guest Storage Retention
-- **Proposal:** Guest progress is stored indefinitely in browser `localStorage`. When a user registers, their `localStorage` is preserved alongside the cloud copy.
-- **Question for User:** Should `localStorage` progress be cleared upon sign-out to protect shared computers (e.g. school/library labs), or retained so the device remains usable in guest mode? (Recommended: Retain local copy unless user explicitly clicks "Reset Progress" or selects "This is a public computer" during logout).
-
-### Decision Gate 4: Code Snapshot Storage Scope
-- **Proposal:** Store code snapshots only for completed, passing exercises to conserve database storage and avoid storing intermediate keystrokes.
-- **Question for User:** Is storing only passing exercise solutions sufficient for Release 2.0, or do you require capturing all failed attempts for instructional debugging?
+### Unresolved Questions Requiring User Input
+1. **Password Re-Authentication on Account Deletion:** Should self-service account deletion require entering the user's current password inside the modal, or is an active authenticated session sufficient? *(Recommended: Require password confirmation for security).*
+2. **Assessment Retry Throttling:** Should server-side graded knowledge checks enforce a cooldown period (e.g., 5 minutes after 3 consecutive failures) to prevent brute-forcing multiple-choice questions? *(Recommended: Enforce cooldown on milestone assessments).*
 
 ---
 
-*End of Phase 0 Specification. Implementation is paused pending user review and approval.*
-
+*End of Phase 0.1 Specification. Implementation remains paused pending final review and approval.*
